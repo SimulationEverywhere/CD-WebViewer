@@ -10,20 +10,14 @@
 <b>Limitations:</b>
 <li>No support yet for 4+ dimensional models.</li>
 <li>No support yet for coupled model (multi-component) logs. It currently defaults to only view the first declared component.</li>
-<li>No support yet for transitory state (superdense time) playback. Currently only shows the very last state within each time instance.</li>
-<li>Need to implement time based recording instead of fps based (get variable timestep through WebM per-frame duration)</li>
 <hr>
-<b>v 0.080</b><ul>
-	<li>Fixed: video recording works again for any number of "layout columns". </li>
-		<ul><li>Note: transparent pixels broke Whammy's compile(); so careful around calls like clearRect().</li></ul>
-		<ul><li><i>Thanks</i> to Augustin Ismael Montero and Ekambir Sidhu for reporting this issue.</li></ul>
-	<li>Fixed: video now records as fast as possible, not limited by webviewer's fps setting.</li>
-	<li>Fixed: video preview panel ("watch" link) should no longer get blocked by ad/popup-blockers</li>
-	<li>Added: option to show a timestamp in the recorded video.</li>
+<b>v 0.076</b><ul>
+	<li>Change: The file input can now handle multiple files.</li>
+	<ul><li><i>Thanks</i> to  Bruno St-Aubin for contributing to this change.</li></ul>
 </ul>
 <b>v 0.075</b><ul>
 	<li>Fixed: output (Y) messages of the parent coupled model no longer halt the parsing of the simulation log.</li>
-	<ul><li><i>Thanks</i> to Ifeoluwa Oyelowo for contributing to this fix.</li></ul>
+	<ul><li><i>Thanks</i> to  Ifeoluwa Oyelowo for contributing to this fix.</li></ul>
 </ul>
 <b>v 0.074</b><ul>
 	<li>Fixed: Palette file (*.pal) loading is no longer whitespace-sensitive; more robust handling of .pal file format.</li>

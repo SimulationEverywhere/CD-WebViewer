@@ -16,6 +16,10 @@
 // 
 grid = {};
 util = {};
+stats = {};
+charts = {};
+charts.states = null;
+charts.transitions = null;
 
 /** Global grid object {model, view, data} \*/
 grid.model = {};
@@ -37,28 +41,24 @@ grid.view.currentTimeFrame = 1;
 grid.view.div = grab('grid');
 grid.view.valueDisplay = grab('showValues').checked;
 grid.view.zeroDisplay = grab('showZero').checked;
-grid.view.timestampDisplay = grab('showTimestamp').checked;
 grid.view.timeline = grab('timeline');
 grid.view.canvy = grab('canvy');
 grid.view.barHeight = 20; //pixels
 grid.view.barWidth = 15;
-grid.view.timestampBarHeightMax = 30; // max timestamp bar height
-grid.view.timestampBarHeight = grid.view.timestampDisplay ? grid.view.timestampBarHeightMax:0;
 grid.view.layoutColumns = 1; // columns of port layers 
 grid.view.layersNeedUpdate = true;
 grid.view.gridOverlayWidth = 1;
 grid.view.playbackHandle = 0;
-grid.view.recordHandle = 0;
 grid.view.playbackDirection = 0; // 0: paused, 1: forwards, 2: backwards
-grid.view.FPS = grab('framerate').value; // frames per second
-grid.view.frameTime = () => 1000 / grid.view.FPS; // ms per frame
+grid.view.FPS = 1000/ grab('framerate').value;
+grid.view.frameTimer = 0;
 grid.view.gfx;
 grid.view.redrawRequested = true;
 SCL = grab('cellScale').value;
 grid.view.isRecording = false;
 grid.view.video = {};
-grid.view.videoOutput = {};
-function grab(id)	{return document.getElementById(id);}
+grid.view.videoOutput;
+
 function previousCacheTime(t){	// find most previous cache point to time t
 	var	isLastFrame = (t==(grid.model.frameCount-1));
 	return isLastFrame ? t : Math.floor(t/grid.view.CACHE_PERIOD)*grid.view.CACHE_PERIOD;}
@@ -77,9 +77,11 @@ grid.loadSimulation = function(){
 	grid.pausePlayback();
 	grab('BtnParseY').style.background = 'rgba(35,112,77, 0.5)';
 	grab('BtnParseY').disabled = true;
-	grid.model.data=[];	// clear entire grid data
+	grid.model.data=[];
 	inp.parseYChunks();
-
+	// Guess a good zoom scale to start with (at least 1px wider than grid lines)
+	SCL = Math.max(Math.round(750/(grid.model.dimX*grab('layoutColumns').value)), 1+grid.view.gridOverlayWidth);
+	grab('cellScale').value = SCL;
 	// Setup timeline ticks to match cached frames (purely aesthetic feedback)
 	//  -- harder than I thought. too much hastle at this point
 }
@@ -93,8 +95,11 @@ grid.setupGrid = function(){
 
 	var gridDiv = grid.view.div;
 	var gridData= grid.model; 
-	var canvy = grid.view.canvy;
-	grid.view.gfx = canvy.getContext('2d');
+
+	// Set max columns
+	var cols = grab('layoutColumns');
+	cols.max = grid.model.ports.length * gridData.dimZ; 
+	//cols.value = Math.min(cols.value, cols.max) // clip it if necessary
 
 	// Disable extra 'out' port by default
 	var skipOut = 0
@@ -104,6 +109,14 @@ grid.setupGrid = function(){
 	// If only single port in single layer, disable port title bar
 	grid.view.barHeight= (grid.model.ports.length == 1 && gridData.dimZ == 1) ? 0 : 20;
 
+	var canvy = grid.view.canvy;
+	grid.view.gfx = canvy.getContext('2d');
+	
+	var nGrid = gridData.dimZ*(grid.model.ports.length-skipOut);
+	
+	canvy.width = (gridData.dimX*SCL+grid.view.barWidth) * grid.view.layoutColumns - grid.view.barWidth;
+	canvy.height= (gridData.dimY*SCL+grid.view.barHeight)* Math.ceil(nGrid/grid.view.layoutColumns);
+  
 	// Signal that layers need to be redrawn
 	grid.view.layersNeedUpdate = true;
 
@@ -111,7 +124,7 @@ grid.setupGrid = function(){
 	grid.toggleUI(true, ['precision','BtnRecord','BtnPlay', 'timelineSeek',
 						  'fixedPrecision', 'precision','loop', 'BtnRewind', 
 						  'BtnPlayBw','BtnStepBw', 'BtnStepFw','BtnLastFrame',
-						  'showValues', 'showGridOverlay', 'layoutColumns', 'showTimestamp']);
+						  'showValues', 'showGridOverlay', 'layoutColumns']);
 	if(grab('showValues').checked) 		grid.toggleUI(true, ['showZero']);
 	if(grab('showGridOverlay').checked) grid.toggleUI(true, ['gridOverlayColor']);
 
@@ -121,41 +134,25 @@ grid.setupGrid = function(){
 
 	// Populate "Detected Layers" list and clear it
 	var layersList = grab('LayersList'); layersList.innerHTML='';
+	
 	for (var z=0; z<gridData.dimZ; z++){
 		layersList.innerHTML += 
 			"<label><input onclick='grid.toggleLayer(["+z+",-1])' type='checkbox' id='layer"+z+"' checked>Layer"+z+" (x,y,"+z+")</label><br>";
+				
 		for (var i=0; i<grid.model.ports.length;i++){
 			layersList.innerHTML += "&emsp;&#10149;<label><input onclick='grid.toggleLayer(["+z+","+i+
-					"])' type='checkbox' id='Layer"+z+"_Port"+grid.model.ports[i]+"' checked>Port:"+grid.model.ports[i]+"</label><br>";
+					"])' type='checkbox' id='Layer"+z+"_Port"+grid.model.ports[i]+"' checked>Port:"+grid.model.ports[i]+"</label>" + 
+					"&emsp;<label><input onclick='grid.toggleCharts("+z+","+i+")' name='chartRadio' type='radio' id='Layer_"+z+"_Port_"+i+"_Chart'>Charts</label><br>";
+			
 			if(i==grid.model.ports.length-1)
 				LayersList.innerHTML += "<hr>";	// insert divider after last port in this layer
 		}
 		// Check weird 'out' port
 		if(skipOut)
 			grab('Layer'+z+'_Port'+'out').checked = false;
+		
 	}
-
-	// Try to provide aesthetic defaults for layoutColumns and pixels/cell (zoom)
-	var visiblePorts = grid.countVisiblePorts();
-	var cols = grab('layoutColumns'); 
-
-	// Default to "up to 2" columns
-	cols.max = visiblePorts;
-	cols.value = Math.min(cols.max,2);
-	grid.view.layoutColumns = cols.value;
-
-	// Guess a good zoom scale to start with (at least 1px wider than grid lines)
-	SCL = Math.max(Math.round(750/(grid.model.dimX*grid.view.layoutColumns)), 1+grid.view.gridOverlayWidth);
-	grab('cellScale').value = SCL;
-
-	// Set canvas dimensions
-	canvy.width = (gridData.dimX*SCL+grid.view.barWidth) * 
-				  grid.view.layoutColumns - grid.view.barWidth;
-	canvy.height= (gridData.dimY*SCL+grid.view.barHeight)* 
-	              Math.ceil(gridData.dimZ*(grid.model.ports.length-skipOut)/grid.view.layoutColumns)
-				  + grid.view.timestampBarHeight;
-
-
+	
 	//******************
 	// Finally, initialize the single view frame buffer, ready for rendering (updateGridView).
 	// This buffer will eliminate the need to rewind playback every time we change a paramter,
@@ -179,7 +176,6 @@ grid.updateGridView = function(){
 		precision 		= grab('precision').value,
 		fixedPrecision 	= grab('fixedPrecision').checked,
 		canvy 			= grid.view.canvy,
-		canvyDiv        = grab("canvyDiv"),
 		barH 			= grid.view.barHeight,
 		barW 			= grid.view.barWidth,
 		cols 			= grid.view.layoutColumns,
@@ -191,34 +187,28 @@ grid.updateGridView = function(){
 
 	if (!data.length) return;		// if there's no data, return
 
-	gfx.font = (0.7*SCL)+'px monospace';
+	gfx.font = (0.7*SCL)+'px Arial';
 	gfx.textAlign = 'center';
 	// Loop over every layer to render it
 	var t = grid.view.currentTimeFrame;
 	var p = grid.palette; // shorthand: p[i]=[//pair [//range [start, end], // color [R,G,B]]]
 	var v, cell;
-	var gridOverlayColor = grab('gridOverlayColor').value +'BA' || 'rgb(37,37,46,186)';
+	var gridOverlayColor = grab('gridOverlayColor').value || 'rgb(120,120,130)';
 
 	var layerWidth  = SCL*grid.model.dimX,	// not including port layer padding (barW)
 		layerHeight = SCL*grid.model.dimY;	// not including port title (barH)
 
 	// Clear entire grid if layers need update
-	if(grid.view.layersNeedUpdate){
-		// Transparent pixels break Whammy encoder
-		//gfx.clearRect(0, 0,canvy.width,canvy.height); 
-		
-		// Use canvas div bg color instead
-		gfx.fillStyle = window.getComputedStyle(canvyDiv).getPropertyValue('background-color');
-		gfx.fillRect(0, 0,canvy.width,canvy.height);
-	}
+	if(grid.view.layersNeedUpdate)
+		gfx.clearRect(0, 0,canvy.width,canvy.height)
 	
 	// Is this frame cached? (i.e. last or multiple of caching period)
 	var	isLastFrame 	= (t==(grid.model.frameCount-1));
 	var	frameIsCached 	= isLastFrame || !(t%grid.view.CACHE_PERIOD);
+	grid.view.redrawRequested=grid.view.redrawRequested||frameIsCached; //request full frame render
 	var cacheID 		= isLastFrame ? dc.length-1: Math.floor(t/grid.view.CACHE_PERIOD);	
 	var cacheEnabled 	= grid.view.CACHE_ENABLED;
 	var showCacheOnly 	= grid.view.SHOW_CACHE_ONLY;
-	grid.view.redrawRequested = grid.view.redrawRequested||frameIsCached; //request full frame render
 
 	// Fill the single-frame view buffer (fb[z][y][x]=cell[x][y][z].value)
 	if(frameIsCached) // grab directly from cache if available
@@ -251,21 +241,23 @@ grid.updateGridView = function(){
 			
 			// Anchor (top-left corner of current port layer)
 			var layerPosX = column*(layerWidth+barW),
-				layerPosY = barH+row*(layerHeight+barH) + grid.view.timestampBarHeight;
+				layerPosY = barH+row*(layerHeight+barH);
 
 			// Redraw layer title bars
 			if(grid.view.layersNeedUpdate){
+				// Clear entire port layer
+				//gfx.clearRect(layerPosX, layerPosY-barH,layerPosX+layerWidth+barW,layerPosY+layerHeight);
 				// Clear current bar
 				gfx.shadowBlur=0;
-				// gfx.fillStyle = window.getComputedStyle(canvyDiv, 'background-color');
-				// gfx.fillRect(layerPosX, layerPosY-barH,layerPosX+layerWidth,layerPosY);
+				gfx.fillStyle = 'rgb(40,40,40)';
+				gfx.fillRect(layerPosX, layerPosY-barH,layerPosX+layerWidth,layerPosY);
 				// Render port title bar
 				gfx.font = 'normal '+barH*0.6+'px monospace';
 				gfx.textAlign = 'left';
-				gfx.fillStyle = 'rgb(190,190,210)';
-				gfx.fillText(' \u25BC Layer:'+layer+' [Port:'+ports[portID]+']',layerPosX,layerPosY-barH*0.25);		
+				gfx.fillStyle = 'rgb(190,190,190)';
+				gfx.fillText('\u25BC Layer:'+layer+' [Port:'+ports[portID]+']',layerPosX,layerPosY-barH*0.25);			
 			}
-
+			
 			// **** If redraw requested, render entire buffer(not just incremental update in this frame)
 			if(grid.view.redrawRequested){
 				// remove the request, we're about to process the last port of its last layer 
@@ -279,6 +271,7 @@ grid.updateGridView = function(){
 							v = fb[layer][y][x][portID];			// use framebuffer
 						gfx.shadowColor = 'rgba(0,0,0,0)';
 						gfx.shadowBlur = 0;
+						
 						// Find palette color p[i]=[[begin,end],[r,g,b]]
 						gfx.fillStyle = '#9696A0'; // start with default
 						for(var c=p.length;c-->0;){
@@ -391,65 +384,39 @@ grid.updateGridView = function(){
 			}
 		}
 	}
-
 	// Layer layout and title bars have been updated
 	grid.view.layersNeedUpdate = false;
 	grid.updateTimelineView();
-
-	// Draw timestamp
-	if(grid.view.timestampDisplay /*&& grid.countVisiblePorts() != 0*/){
-		var barT = grid.view.timestampBarHeight; //shorthand
-
-		// Clear current timestamp bar
-		gfx.shadowColor = 'rgba(0,0,0,0)'; 
-		gfx.shadowBlur = 0;
-		gfx.fillStyle = window.getComputedStyle(canvyDiv).getPropertyValue('background-color');
-		gfx.fillRect(0,0, canvy.width, barT);
-		gfx.fillStyle = 'rgb(25,25,30)';
-		gfx.fillRect(0,0, canvy.width, barT-2);
-
-		// Font setup
-		gfx.shadowBlur=0;
-		gfx.font = barT*.45+'px "Varela Round"';
-		gfx.fillStyle = 'rgb(180,180,190)';
-		
-		// Draw timestamp
-		gfx.textAlign = 'right';
-		gfx.fillText(grab('timelineStatus').innerHTML, canvy.width-barT*.5,barT*.6);		
-
-		// Draw model name
-		gfx.textAlign = 'left';
-		gfx.fillText('Model: '+grid.model.name, barT*.5, barT*.6);		
-	}
+	
+	grid.updateCharts(grid.view.currentTimeFrame, grid.view.viewBuffer);
 }
 
 grid.updateLayersView = function(){
+	var ports = grid.model.ports;	// shorthand
+
 	// Signal that layers layout & titles need to be redrawn
 	grid.view.layersNeedUpdate = true;
 
-	// Count total of visible ports
-	var portsDisplayed = grid.countVisiblePorts(); 
-
-	// Bound the number of columns to visible ports (not working right)
-	// grab('layoutColumns').max = portsDisplayed;
-	// grab('layoutColumns').value = Math.min(grab('layoutColumns').value,grab('layoutColumns').max);
+	// Count total of visible layers
+	var portsDisplayed = 0;
+	for (var z=0; z<grid.model.dimZ; z++ ) // for each layer
+		for (var i=ports.length;i-->0;)	// for each port
+			portsDisplayed += (!grab('Layer'+z+'_Port'+ports[i]).checked || 
+								grab('Layer'+z+'_Port'+ports[i]).disabled)  ? 0:1; 
 
 	// Reset canvas
 	grid.view.canvy.width  = (grid.model.dimX*SCL+grid.view.barWidth) *
 							 grid.view.layoutColumns - grid.view.barWidth;
 	grid.view.canvy.height = (grid.model.dimY*SCL+grid.view.barHeight)* 
-							 Math.ceil(portsDisplayed/grid.view.layoutColumns) + grid.view.timestampBarHeight;
-
+							 Math.ceil(portsDisplayed/grid.view.layoutColumns);
+				
 	// Rewind and update grid view
 	//grid.rewindPlayback(); // don't need to rewind everytime anymore :)
-							 // thanks to grid.view.viewBuffer storing entire current view
+							 // thanks to grid.view.viewBuffer
 	grid.view.redrawRequested = true;
 	grid.updateGridView();
-
-	// New dimension feedback to user
-	grab('canvasDim').innerHTML = grid.view.canvy.width + 'x' +
-								  grid.view.canvy.height+ ' px' ;
 }
+
 grid.toggleLayer = function(ID){
 	var ports = grid.model.ports;	// shorthand
 
@@ -467,15 +434,7 @@ grid.toggleLayer = function(ID){
 		grid.updateLayersView();
 	}
 }
-grid.countVisiblePorts = function(){
-	var ports = grid.model.ports;	// shorthand
-	var portsDisplayed = 0;
-	for (var z=0; z<grid.model.dimZ; z++ ) // for each layer
-		for (var i=ports.length;i-->0;)	// for each port
-			portsDisplayed += (!grab('Layer'+z+'_Port'+ports[i]).checked || 
-								grab('Layer'+z+'_Port'+ports[i]).disabled)  ? 0:1;
-	return portsDisplayed;
-}
+
 grid.updateLayoutColumns = function(){
 	grid.view.layoutColumns = grab('layoutColumns').value;
 	grid.view.layersNeedUpdate = true;
@@ -563,7 +522,7 @@ grid.playFrames = function(){
 	if(grid.view.playbackDirection != 1){
 		grid.pausePlayback();
 		grid.view.playbackDirection = 1;
-		grid.view.playbackHandle = setInterval(grid.nextFrame, grid.view.frameTime());
+		grid.view.playbackHandle = setInterval(grid.nextFrame, grid.view.FPS);
 		// Visual feedback
 		grab('BtnPlay').style.backgroundColor='#335536';
 		grab('BtnPlay').innerHTML = '<B>I</B> <B>I</B>';
@@ -579,7 +538,7 @@ grid.playFramesBackwards = function(){
 	if(grid.view.playbackDirection != 2){
 		grid.pausePlayback(); // for reversing playback direction
 		grid.view.playbackDirection = 2;
-		grid.view.playbackHandle = setInterval(grid.prevFrame, grid.view.frameTime()*grid.view.CACHE_PERIOD);
+		grid.view.playbackHandle = setInterval(grid.prevFrame, grid.view.FPS);
 		//Visual feedback
 		grab('BtnPlayBw').style.backgroundColor='#335536';
 		grab('BtnPlayBw').innerHTML='<B>I</B> <B>I</B>';
@@ -593,7 +552,6 @@ grid.playFramesBackwards = function(){
 grid.pausePlayback = function(){
 	grid.view.playbackDirection = 0;
 	clearInterval(grid.view.playbackHandle);
-	clearTimeout(grid.view.recordHandle);
 	// Visual feedback
 	grab('BtnPlay').style.backgroundColor='';
 	grab('BtnPlay').innerHTML = '&#x25B6';
@@ -605,33 +563,23 @@ grid.pausePlayback = function(){
 
 
 grid.recordFrames = function(){
-	//Return if not in Desktop Chrome
+	// Return if not in Desktop Chrome
 	if(!(window.chrome && !window.opera) || /(android)/i.test(navigator.userAgent)){
 		window.alert("Sorry, video recording is only supported on Desktop Chrome ;(");
 		return;
 	}
-	if (grid.model.frameCount == 0) return;	// no frames to record, silly
+	if (grid.model.frameCount == 0) return;
 	
-	// Record btn pressed on last frame
-	if (grid.view.currentTimeFrame==grid.model.frameCount-1){ 
-		grid.rewindPlayback();
-		// if (grab('loop').checked) grid.rewindPlayback(); // loop then record
-		// else return; // no more frames to record, silly
-	}
-
 	if(!grid.view.isRecording){
 		//Create new video object (fps, quality [0-1])
-		grid.view.video = new Whammy.Video(grid.view.FPS, .99/*0+grab('vidQual').value*/); 
+		grid.view.video = new Whammy.Video(1000/grid.view.FPS, 1/*0+grab('vidQual').value*/); 
 		grab('videoLink').style.display = 'none';
 		grab('videoDownloadLink').style.display = 'none';
-		grab('videoConverterLink').style.display = 'none';
 		grab('videoViewLink').style.display = 'none';
 		grid.pausePlayback();
 		grid.view.playbackDirection = 1;
+		grid.view.playbackHandle = setInterval(grid.recordNextFrame,grid.view.FPS);
 		grid.view.isRecording = true;
-		
-		grid.recordNextFrame(); // Start recording
-		
 		// Visual feedback
 		grab('BtnRecord').style.backgroundColor='#683535';
 		grab('BtnRecord').innerHTML = '&#x25A0; Stop Recording';		
@@ -640,13 +588,33 @@ grid.recordFrames = function(){
 		grid.toggleUI(false, ['cellScale','BtnParseY','framerate','vidQual', 'showZero', 'layoutColumns',
 						    'fixedPrecision', 'precision','loop','BtnRewind','BtnStepBw','BtnPlayBw',
 						    'BtnPlay','BtnStepFw','BtnLastFrame','showValues','showGridOverlay',
-						    'gridOverlayColor', 'timelineSeek', 'showTimestamp']);
+						    'gridOverlayColor', 'timelineSeek']);
 	}
 	else{
-		// "Stop Recording" was pressed. Compile recorded so far.
-		grid.compileRecordedVideo();
+		// Stop recording here. Compile the whole video.
+		grid.view.isRecording = false;
+		grid.pausePlayback();
+		grid.view.video.output = grid.view.video.compile();
+		var vidURL = URL.createObjectURL(grid.view.video.output);
+		grab('videoLink').style.display = 'inline';
+		grab('videoDownloadLink').style.display = 'inline';
+		grab('videoViewLink').style.display = 'inline';
+		grab('videoDownloadLink').href = vidURL;
+		grab('videoDownloadLink').download = grid.model.name+'.webm';
+		grab('videoViewLink').onclick = function(){
+			window.open(vidURL,"_blank","width="+grid.view.canvy.width+",height="+grid.view.canvy.height);
+			return;
+		}
+
+		// renable the timeline buttons
+		grid.toggleUI(true, ['cellScale','BtnParseY','framerate','vidQual', 'showZero', 'layoutColumns',
+						   'fixedPrecision', 'precision','loop','BtnRewind','BtnStepBw','BtnPlayBw',
+						   'BtnPlay','BtnStepFw','BtnLastFrame','showValues','showGridOverlay',
+						   'gridOverlayColor', 'timelineSeek']);
+		// Disable random access and backwards playback if cache is disabled
+		if(!grid.view.CACHE_ENABLED)
+			grid.toggleUI(false, ['timelineSeek','BtnPlayBw','BtnStepBw','BtnLastFrame']);
 	}
-		
 }
 
 grid.toggleUI = function(isEnabled, list){
@@ -655,61 +623,40 @@ grid.toggleUI = function(isEnabled, list){
 }
 
 grid.recordNextFrame = function(){
-	// Clear any scheduled recording
-	clearTimeout(grid.view.recordHandle);
-
 	if(grid.view.currentTimeFrame<grid.model.frameCount-1){
 		// Record this image frame
-		grid.view.video.add(grid.view.canvy);
-		grid.nextFrame();
-		// Queue next frame (asap)
-		grid.view.recordHandle = setTimeout(grid.recordNextFrame, 17);
+		grid.view.video.add(grid.view.gfx);
+		grid.view.currentTimeFrame++;
+		grid.updateGridView();
 		return;
 	}
 	else if(grid.view.currentTimeFrame==grid.model.frameCount-1){
-		// Add last frame (ensure it's the last frame)
-		grid.view.video.add(grid.view.canvy);
+		// Add last frame
+		grid.view.video.add(grid.view.gfx);
 	}
 
 	// End of timeline. Compile the whole video.
-	grid.compileRecordedVideo();
-}
-
-grid.compileRecordedVideo = function(){
+	// Stop recording here. Compile the whole video.
+	// Stop recording here. Compile the whole video.
 	grid.view.isRecording = false;
 	grid.pausePlayback();
-	clearTimeout(grid.view.recordHandle);
-	grid.view.videoOutput = grid.view.video.compile();
-	var vidURL = window.URL.createObjectURL(grid.view.videoOutput);
+	grid.view.video.output = grid.view.video.compile();
+	var vidURL = URL.createObjectURL(grid.view.video.output);
 	grab('videoLink').style.display = 'inline';
 	grab('videoDownloadLink').style.display = 'inline';
-	grab('videoConverterLink').style.display = 'inline';
 	grab('videoViewLink').style.display = 'inline';
 	grab('videoDownloadLink').href = vidURL;
 	grab('videoDownloadLink').download = grid.model.name+'.webm';
 	grab('videoViewLink').onclick = function(){
-		// This old one-liner gets blocked by AdBlocker. Keeping it, for record.
-		//window.open(vidURL,"_blank","width="+grid.view.canvy.width+",height="+grid.view.canvy.height);
-		
-		// Adblocker is triggered if window.location (url) is changed,
-		// so we use write() instead
-		var preview = window.open("", "_blank", "width=" +(grid.view.canvy.width +10) +
-											   ",height="+(grid.view.canvy.height+50) );
-		preview.document.write(
-			"<title>"+grid.model.name+".webm ("+grid.view.FPS+" fps)</title>\
-			<style>body{margin:0; padding:5px; background-color:#101013}</style>\
-			<video autoplay controls width='100%' height='98.5%'\
-			 style='object-fit:contain;object-position:50% 0'>\
-				<source src='"+vidURL+"' type='video/webm'>\
-			</video>" 
-		);
+		window.open(vidURL,"_blank","width="+grid.view.canvy.width+",height="+grid.view.canvy.height);
+		return;
 	}
 
 	// renable the timeline buttons
 	grid.toggleUI(true, ['cellScale','BtnParseY','framerate','vidQual', 'showZero', 'layoutColumns',
 						  'fixedPrecision', 'precision','loop','BtnRewind','BtnStepBw','BtnPlayBw',
 						  'BtnPlay','BtnStepFw','BtnLastFrame','showValues','showGridOverlay',
-						  'gridOverlayColor', 'timelineSeek', 'showTimestamp']);
+						  'gridOverlayColor', 'timelineSeek']);
 	// Disable random access and backwards playback if cache is disabled
 	if(!grid.view.CACHE_ENABLED)
 		grid.toggleUI(false, ['timelineSeek','BtnPlayBw','BtnStepBw','BtnLastFrame']);
@@ -736,7 +683,7 @@ grid.updateTimelineView = function(){
 }
 
 grid.updateFPS = function(){
-	grid.view.FPS = grab('framerate').value;
+	grid.view.FPS = 1000/grab('framerate').value;
 	if(grid.view.playbackDirection){  // If playing, pause and reset it for new FPS
 		var i = grid.view.playbackDirection;
 		grid.pausePlayback();
@@ -775,13 +722,6 @@ grid.toggleZeroDisplay = function(){
 	this.view.zeroDisplay = !this.view.zeroDisplay;
 	grid.view.redrawRequested = true;
 	grid.updateGridView();
-}
-
-grid.toggleTimestampDisplay = function(){
-	this.view.timestampDisplay = !this.view.timestampDisplay;
-	grid.view.timestampBarHeight = grid.view.timestampDisplay ? grid.view.timestampBarHeightMax:0;
-	grid.view.layersNeedUpdate = true;
-	grid.updateLayersView();
 }
 
 grid.reCSSGrid = function(that){
@@ -838,7 +778,7 @@ grid.initialView = function(){
 	grid.toggleUI(false, ['precision','BtnRecord','BtnPlay','timelineSeek',
 						  'fixedPrecision','precision','loop','BtnRewind', 
 						  'BtnPlayBw','BtnStepBw','BtnStepFw','BtnLastFrame',
-						  'showValues','showZero','showGridOverlay','layoutColumns', 'showTimestamp']);
+						  'showValues','showZero','showGridOverlay','layoutColumns']);
 
 	// Record useragent string (for browser-specific customizations)
 	document.documentElement.setAttribute('data-UA', navigator.userAgent);
@@ -848,5 +788,51 @@ grid.initialView();
 // View main
 grid.viewMain = function(){
 	grid.setupGrid();	
-	grid.updateLayersView();
+	grid.setupCharts();
+	grid.updateGridView();
 }
+
+// Bruno's Stuff
+grid.getColor = function(value) {
+	for (var i = 0; i < grid.palette.length; i++) {
+		var mmax = grid.palette[i][0];
+		
+		if (value < mmax[0] || value > mmax[1]) continue;
+		
+		return d3.color("rgb(" + grid.palette[i][1].join(",") + ")");
+	}
+
+	return d3.color("rgb(255,255,255)");
+}
+
+grid.setupCharts = function() {	
+	var radio = grab('Layer_0_Port_0_Chart');
+	
+	if (radio) radio.checked = true;
+	
+	grid.toggleCharts(0, 0);
+}
+
+grid.toggleCharts = function(z, port) {
+	Viz.Utils.empty("chartsDiv");
+	
+	var track = JSON.parse("[" + grab('chart_states').value.replace(/\s/g, '').split(",") + "]");
+	
+	var fb = grid.view.viewBuffer;
+	
+	Viz.data.Initialize(z, port, track);
+	
+	charts.states = Viz.charting.BuildStatesChart(grab('chartsDiv'), "state", [70, 40, 20, 50]);
+	charts.transitions = Viz.charting.BuildTransitionsChart(grab('chartsDiv'), "activity", [50, 50, 50, 50]);
+	stats = Viz.stats.Build(grab('chartsDiv'), Viz.data);
+}
+
+grid.updateCharts = function(t, fb) {	
+	Viz.data.UpdateTime(t, fb);
+	
+	charts.states.Update(Viz.data.StatesAsArray());
+	charts.transitions.Update(Viz.data.TransitionAsArray());
+	stats.Update(Viz.data.t, Viz.data.states);
+}
+
+function grab(id)	{return document.getElementById(id);}

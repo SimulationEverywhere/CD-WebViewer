@@ -12,7 +12,6 @@
  */
 
 inp = {};
-inp.fileLoaded = false;
 inp.logLoaded = false;
 inp.logParsed = false;
 inp.file = [];
@@ -23,42 +22,42 @@ inp.MAXFILESIZE = 5500000000; // for testing only: 5.5GB
 
 // Process drag'n'dropped files
 inp.processDroppedFiles = function(f){
-	var file = f.files[0]; // process the first (and only?) file
-	console.log(f.id + ' submitted');
-	var fReader = new FileReader();
-
-	//=== [TODO] Rewrite this into proper View/HTML spots, not here
-	var statMsg = []; // array of status messages
-	statMsg[0] = file.name+'<br><b>Loaded!!</b>';
-	statMsg[1] = file.name+'<br><b>Processing...</b>';
-	var statBox = document.getElementById(f.id).parentNode.children[3];	// statBox div
-	statBox.innerHTML = statMsg[1]; 	// indicate file started processing
-	//================
+	for (var i=0; i < f.files.length; i++){
+		var file = f.files[i]; // process the first (and only?) file
+		var m = file.name.match(/.(val$|ma$|pal$|log$)/);
 	
-	if(f.id=='log-file'){
-		//console.log(inp.file['log-file'].substr(0,100));
-		//grid.parseYMessages();
-		inp.logFile = file;
-		inp.logLoaded = true;
-		statBox.innerHTML = file.name+'<br><b>Ready to parse</b>';
-		//inp.chunckifyEnds(file);
-	}else{
-		fReader.readAsText(file);
-		fReader.onloadend = (function(){
-			inp.file[f.id] = fReader.result; 
-			if(f.id=='pal-file') inp.fileLoaded=true;
-			//console.log('Status after file: '+fReader.readyState);
-			console.log(f.id + ' loaded');
-			statBox.innerHTML = statMsg[0]; 	// indicate file loaded
-			//grid.initializeGridStvalues();
-			//console.log(grid.initialStValues);
-		});
+		if (!m) continue;
+		
+		var box = document.getElementById(m[1] + "-file").parentNode.children[3];	// statBox div
+		
+		if(m[1] == 'log'){
+			inp.logFile = file;
+			inp.logLoaded = true;
+			
+			box.innerHTML = file.name+'<br><b>Ready to parse</b>';
+		}
+		else processFile(box, m[1], file);
+		
+		// [TODO] Use internally defined model name, not file name.
+		// Store file name (sans extension) as model name. 
+		if(m[1] == 'ma') grid.model.name = file.name.slice(0, file.name.lastIndexOf('.'));
 	}
+	
+	function processFile(box, ext, file) {
+		var fId = ext + "-file";
 
-	// [TODO] Use internally defined model name, not file name.
-	// Store file name (sans extension) as model name. 
-	if(f.id == 'ma-file')
-		grid.model.name = file.name.slice(0, file.name.lastIndexOf('.'));
+		box.innerHTML = file.name + '<br><b>Processing...</b>';	// indicate file started processing
+		
+		var fReader = new FileReader();
+
+		fReader.readAsText(file);
+			
+		fReader.onloadend = function(){ 
+			inp.file[fId] = fReader.result; 
+			
+			box.innerHTML = file.name + '<br><b>Loaded!!</b>'; 	// indicate file loaded
+		}		
+	}
 }
 
 /**
@@ -81,9 +80,9 @@ inp.parseYChunks = function(){
 	if(!inp.logLoaded) return; // if log not yet loaded, exit 
 
 	grid.init() // reset grid data and reload input properties
-
-	grid.model.frameBuffer = []; // set a new single frame buffer
-	grid.model.lastT = [0,0,0,0];// set initial 'last parsed time'
+	
+	grid.model.frameBuffer = []; // set a new frameBuffer
+	grid.model.lastT = [0,0,0,0];// set initial 'last recorded time'
 
 	//------------------------		
 	// C. Loop over chunks
@@ -115,7 +114,7 @@ inp.parseYChunks = function(){
 		// We have a chunk for sure (we just loaded one)
 		C.chunkCount++;
 		// Indicate some progress
-		console.log('Chunk#'+(C.chunkCount-1)+' ('+(100*C.start/C.file.size).toFixed(5)+'%):');
+
 		// Process the chunk we just read
 		C.chunkContent = C.fileReader.result;
 		// Only process full lines. Use safeEnd as starting point for next chunk
@@ -123,17 +122,14 @@ inp.parseYChunks = function(){
 		// progress %
 		var progress = (100*C.end/Math.min(C.file.size, inp.MAXFILESIZE));
 		// Loading progress feedback to user
-		grab('BtnParseY').innerHTML = 'Parsing log...('+progress.toFixed(2)+'%)';
 		grab('BtnParseY').style.background = 'linear-gradient(to right, rgb(80,80,75) 0%,rgb(80,80,75)'+
 											  progress+'%,rgba(35,112,77, 0.5) '+
 											  progress+1+'%, rgba(35,112,77, 0.5)';
-
 		// Check end of file
 		if(C.end > C.file.size || C.end > inp.MAXFILESIZE){	// TEST ONLY: limit to 6GB
 			grid.parseYMessages(C.chunkContent, safeEndIndex,true);		// signal lastChunk=true	
 			statBox.innerHTML = C.file.name+'<br><b>All parsed!</b>';
 			inp.logParsed = true;
-			grab('BtnParseY').innerHTML = 'Parse Simulation Log';
 			grab('BtnParseY').style.background = '';
 			grab('BtnParseY').disabled = false;
 			grid.modelMain();

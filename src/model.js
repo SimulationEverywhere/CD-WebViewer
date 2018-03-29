@@ -254,6 +254,7 @@ grid.parseYMessages = function(inLog, safeEnd, isLastChunk){
 	}
 }
 grid.initializeGridDim = function(){
+
 	// Get dimensions from .ma file in base 10 (decimal), and default to 5 if NaN
 	grid.model.dimX = function(){
 						var x = Math.round(parseFloat(grid.parseInputAttribute('width', inp.file['ma-file']), 10));
@@ -502,7 +503,8 @@ grid.initializePalette = function(){
 
 	// load palette data from file['pal-file']
 	var lines = inp.file['pal-file'].split(/\n/);
-	grid.palette = [];	// grid.palette[i] = [/*range*/ [start, end], /*color*/ [R,G,B]]
+	grid.palette = [];	// [i] = //pair [//range [start, end], // color [R,G,B]]
+
 
 	// Parse the palette file
 	if(lines[0].indexOf('[') != -1){

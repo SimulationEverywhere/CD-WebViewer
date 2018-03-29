@@ -524,7 +524,7 @@ window.Whammy = (function(){
 			frame = frame.canvas;
 		}
 		if(frame.toDataURL){
-			frame = frame.toDataURL('image/webp', this.quality)
+			frame = frame.toDataURL('image/webp', 0.9)
 		}else if(typeof frame != "string"){
 			throw "frame must be a a HTMLCanvasElement, a CanvasRenderingContext2D or a DataURI formatted string"
 		}
@@ -544,7 +544,7 @@ window.Whammy = (function(){
 			return webp;
 		}), outputAsArray)
 	}
-	
+
 	return {
 		Video: WhammyVideo,
 		fromImageArray: function(images, fps, outputAsArray){
