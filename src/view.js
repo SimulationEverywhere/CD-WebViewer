@@ -199,8 +199,14 @@ grid.updateGridView = function(){
 		layerHeight = SCL*grid.model.dimY;	// not including port title (barH)
 
 	// Clear entire grid if layers need update
-	if(grid.view.layersNeedUpdate)
-		gfx.clearRect(0, 0,canvy.width,canvy.height)
+	if(grid.view.layersNeedUpdate){
+		// Transparent pixels break Whammy encoder
+		//gfx.clearRect(0, 0,canvy.width,canvy.height); 
+		
+		// Use canvas div bg color instead
+		gfx.fillStyle = window.getComputedStyle(canvyDiv).getPropertyValue('background-color');
+		gfx.fillRect(0, 0,canvy.width,canvy.height);
+	}
 	
 	// Is this frame cached? (i.e. last or multiple of caching period)
 	var	isLastFrame 	= (t==(grid.model.frameCount-1));
